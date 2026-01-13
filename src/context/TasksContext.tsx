@@ -19,7 +19,6 @@ interface TasksContextValue {
 const TasksContext = createContext<TasksContextValue | undefined>(undefined);
 
 export function TasksProvider({ children }: { children: ReactNode }) {
-  // Get all task methods & state from useTasks
   const {
     tasks,
     loading,
