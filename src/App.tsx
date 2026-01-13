@@ -41,6 +41,7 @@ function AppContent() {
     deleteTask,
     undoDelete,
     lastDeleted,
+    clearLastDeleted
   } = useTasksContext();
   const [q, setQ] = useState("");
   const [undoOpen, setUndoOpen] = useState(false);
@@ -103,16 +104,18 @@ function AppContent() {
     [deleteTask, createActivity]
   );
   const handleCloseUndo = useCallback(() => {
-    setUndoOpen(false); // close snackbar UI
-  }, []);
+    setUndoOpen(false);
+    clearLastDeleted(); // close snackbar UI
+  }, [clearLastDeleted]);
 
   const handleUndo = useCallback(() => {
     undoDelete();
     setUndoOpen(false); // close snackbar
+    clearLastDeleted();
     setActivity((prev) =>
       [createActivity("undo", "Undo delete"), ...prev].slice(0, 50)
     );
-  }, [undoDelete, createActivity]);
+  }, [undoDelete,clearLastDeleted, createActivity]);
 
   return (
     <Box sx={{ minHeight: "100dvh", bgcolor: "background.default" }}>

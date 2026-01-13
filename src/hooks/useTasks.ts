@@ -9,7 +9,6 @@ import {
   withDerived,
   sortTasks as sortDerived,
 } from "@/utils/logic";
-// Local storage removed per request; keep everything in memory
 import { generateSalesTasks } from "@/utils/seed";
 
 interface UseTasksState {
@@ -41,72 +40,40 @@ export function useTasks(): UseTasksState {
   const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
   const fetchedRef = useRef(false);
 
-  function normalizeTasks(input: any[]): Task[] {
-    const now = Date.now();
-    return (Array.isArray(input) ? input : []).map((t, idx) => {
-      const created = t.createdAt
-        ? new Date(t.createdAt)
-        : new Date(now - (idx + 1) * 24 * 3600 * 1000);
-      const completed =
-        t.completedAt ||
-        (t.status === "Done"
-          ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString()
-          : undefined);
-      return {
-        id: t.id ?? crypto.randomUUID(),
-        title: t.title,
-        revenue: Number(t.revenue) ?? 0,
-        timeTaken: Number(t.timeTaken) > 0 ? Number(t.timeTaken) : 1,
-        priority: t.priority,
-        status: t.status,
-        notes: t.notes,
-        createdAt: created.toISOString(),
-        completedAt: completed,
-      } as Task;
-    });
-  }
+  // Normalize task object
+  const normalizeTask = useCallback((t: Partial<Task>): Task => {
+    const created = t.createdAt ? new Date(t.createdAt) : new Date();
+    const completed =
+      t.completedAt ||
+      (t.status === "Done"
+        ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString()
+        : undefined);
+    return {
+      id: t.id ?? crypto.randomUUID(),
+      title: t.title ?? "",
+      revenue: Number(t.revenue) || 0,
+      timeTaken: Number(t.timeTaken) > 0 ? Number(t.timeTaken) : 1,
+      priority: t.priority ?? "Medium",
+      status: t.status ?? "Todo",
+      notes: t.notes ?? "",
+      createdAt: created.toISOString(),
+      completedAt: completed,
+    } as Task;
+  }, []);
 
-  // Initial load: public JSON -> fallback generated dummy
+  // Initial load: JSON fallback to dummy data
   useEffect(() => {
     let isMounted = true;
-
     async function load() {
       try {
         const res = await fetch("/tasks.json");
         if (!res.ok)
           throw new Error(`Failed to load tasks.json (${res.status})`);
         const data = (await res.json()) as any[];
-        const normalized: Task[] = normalizeTasks(data);
-
-        const seen = new Set<string>();
-        const finalData = (
-          normalized.length > 0 ? normalized : generateSalesTasks(50)
-        )
-          .map((t) => ({
-            ...t,
-            id: t.id ?? crypto.randomUUID(),
-            title: t.title ?? "",
-            revenue: Number(t.revenue) || 0,
-            timeTaken: Number(t.timeTaken) > 0 ? Number(t.timeTaken) : 1,
-            priority: t.priority ?? "Medium",
-            status: t.status ?? "Todo",
-            notes: t.notes ?? "",
-            createdAt: t.createdAt
-              ? new Date(t.createdAt).toISOString()
-              : new Date().toISOString(),
-            completedAt:
-              t.completedAt ||
-              (t.status === "Done" ? new Date().toISOString() : undefined),
-          }))
-          .map((t) => {
-            while (seen.has(t.id)) {
-              t.id = crypto.randomUUID();
-            }
-            seen.add(t.id);
-            return t;
-          });
-
-        if (isMounted) setTasks(finalData);
+        const normalized = (data.length ? data : generateSalesTasks(50)).map(
+          normalizeTask
+        );
+        if (isMounted) setTasks(normalized);
       } catch (e: any) {
         if (isMounted) setError(e?.message ?? "Failed to load tasks");
       } finally {
@@ -116,18 +83,19 @@ export function useTasks(): UseTasksState {
         }
       }
     }
-
     load();
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [normalizeTask]);
 
+  // Derived tasks (with ROI, etc.) sorted
   const derivedSorted = useMemo<DerivedTask[]>(() => {
     const withRoi = tasks.map(withDerived);
     return sortDerived(withRoi);
   }, [tasks]);
 
+  // Metrics computation
   const metrics = useMemo<Metrics>(() => {
     if (tasks.length === 0) return INITIAL_METRICS;
     const totalRevenue = computeTotalRevenue(tasks);
@@ -146,53 +114,55 @@ export function useTasks(): UseTasksState {
     };
   }, [tasks]);
 
-  const addTask = useCallback((task: Omit<Task, "id"> & { id?: string }) => {
-    setTasks((prev) => {
-      const id = task.id ?? crypto.randomUUID();
-      const timeTaken = task.timeTaken <= 0 ? 1 : task.timeTaken; // auto-correct
-      const createdAt = new Date().toISOString();
-      const status = task.status;
-      const completedAt = status === "Done" ? createdAt : undefined;
-      return [...prev, { ...task, id, timeTaken, createdAt, completedAt }];
-    });
-  }, []);
+  // Add task
+  const addTask = useCallback(
+    (task: Omit<Task, "id"> & { id?: string }) => {
+      const t = normalizeTask(task);
+      setTasks((prev) => [...prev, t]);
+    },
+    [normalizeTask]
+  );
 
-  const updateTask = useCallback((id: string, patch: Partial<Task>) => {
-    setTasks((prev) => {
-      const next = prev.map((t) => {
-        if (t.id !== id) return t;
-        const merged = { ...t, ...patch } as Task;
-        if (
-          t.status !== "Done" &&
-          merged.status === "Done" &&
-          !merged.completedAt
-        ) {
-          merged.completedAt = new Date().toISOString();
-        }
-        return merged;
-      });
-      // Ensure timeTaken remains > 0
-      return next.map((t) =>
-        t.id === id && (patch.timeTaken ?? t.timeTaken) <= 0
-          ? { ...t, timeTaken: 1 }
-          : t
+  // Update task
+  const updateTask = useCallback(
+    (id: string, patch: Partial<Task>) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          const merged = normalizeTask({ ...t, ...patch });
+          // Preserve completedAt if marking as Done now
+          if (t.status !== "Done" && merged.status === "Done" && !merged.completedAt) {
+            merged.completedAt = new Date().toISOString();
+          }
+          return merged;
+        })
       );
-    });
-  }, []);
+    },
+    [normalizeTask]
+  );
 
-  const deleteTask = useCallback((id: string) => {
-    setTasks((prev) => {
-      const target = prev.find((t) => t.id === id) || null;
-      setLastDeleted(target);
-      return prev.filter((t) => t.id !== id);
-    });
-  }, []);
+  // Delete task
+  const deleteTask = useCallback(
+    (id: string) => {
+      const deleted = tasks.find((t) => t.id === id);
+      if (!deleted) return;
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+      setLastDeleted(deleted);
+    },
+    [tasks]
+  );
 
-  const undoDelete = useCallback(() => {
-    if (!lastDeleted) return;
-    setTasks((prev) => [...prev, lastDeleted]);
-    setLastDeleted(null);
-  }, [lastDeleted]);
+  // Undo delete
+  const undoDelete = () => {
+  if (!lastDeleted) return;
+
+  setTasks(prev => {
+    if (prev.some(t => t.id === lastDeleted.id)) return prev;
+    return [lastDeleted!, ...prev];
+  });
+
+  setLastDeleted(null);
+};
 
   return {
     tasks,
